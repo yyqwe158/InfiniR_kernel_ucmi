@@ -1057,66 +1057,69 @@ static void ax88179_rx_fixup
 	struct net_device *netdev = axdev->netdev;
 	struct net_device_stats *stats = ax_get_stats(netdev);
 
-	memcpy(&rx_hdr, (((u8 *)desc->head) + actual_length - 4),
-	       sizeof(rx_hdr));
+	/* At the end of the SKB, there's a header telling us how many packets
+	 * are bundled into this buffer and where we can find an array of
+	 * per-packet metadata (which contains elements encoded into u16).
+	 */
+	if (skb->len < 4)
+		return 0;
+	skb_trim(skb, skb->len - 4);
+	memcpy(&rx_hdr, skb_tail_pointer(skb), 4);
 	le32_to_cpus(&rx_hdr);
+	pkt_cnt = (u16)rx_hdr;
+	hdr_off = (u16)(rx_hdr >> 16);
 
-	pkt_cnt = rx_hdr & 0xFF;
-	pkt_hdr_curr = hdr_off = rx_hdr >> 16;
+	if (pkt_cnt == 0)
+		return 0;
 
-	aa = (actual_length - (((pkt_cnt + 2) & 0xFE) * 4));
-	if ((aa != hdr_off) ||
-	    (hdr_off >= desc->urb->actual_length) ||
-	    (pkt_cnt == 0)) {
-		desc->urb->actual_length = 0;
-		stats->rx_length_errors++;
-		return;
-	}
+	/* Make sure that the bounds of the metadata array are inside the SKB
+	 * (and in front of the counter at the end).
+	 */
+	if (pkt_cnt * 2 + hdr_off > skb->len)
+		return 0;
+	pkt_hdr = (u32 *)(skb->data + hdr_off);
 
-	rx_data = desc->head;
-	while (pkt_cnt--) {
-		u32 pkt_len;
-		struct sk_buff *skb;
+	/* Packets must not overlap the metadata array */
+	skb_trim(skb, hdr_off);
+
+	for (; ; pkt_cnt--, pkt_hdr++) {
+		u16 pkt_len;
 
 		memcpy(&pkt_hdr, (((u8 *)desc->head) + pkt_hdr_curr),
 		       sizeof(pkt_hdr));
 		pkt_hdr_curr += 4;
 
-		le32_to_cpus(&pkt_hdr);
-		pkt_len = (pkt_hdr >> 16) & 0x1FFF;
+		if (pkt_len > skb->len)
+			return 0;
 
-		if (pkt_hdr & AX_RXHDR_CRC_ERR) {
-			stats->rx_crc_errors++;
-			goto find_next_rx;
+		/* Check CRC or runt packet */
+		if (((*pkt_hdr & (AX_RXHDR_CRC_ERR | AX_RXHDR_DROP_ERR)) == 0) &&
+		    pkt_len >= 2 + ETH_HLEN) {
+			bool last = (pkt_cnt == 0);
+
+			if (last) {
+				ax_skb = skb;
+			} else {
+				ax_skb = skb_clone(skb, GFP_ATOMIC);
+				if (!ax_skb)
+					return 0;
+			}
+			ax_skb->len = pkt_len;
+			/* Skip IP alignment pseudo header */
+			skb_pull(ax_skb, 2);
+			skb_set_tail_pointer(ax_skb, ax_skb->len);
+			ax_skb->truesize = pkt_len + sizeof(struct sk_buff);
+			ax88179_rx_checksum(ax_skb, pkt_hdr);
+
+			if (last)
+				return 1;
+
+			usbnet_skb_return(dev, ax_skb);
 		}
-		if (pkt_hdr & AX_RXHDR_DROP_ERR) {
-			stats->rx_dropped++;
-			goto find_next_rx;
-		}
 
-		skb = napi_alloc_skb(napi, pkt_len);
-		if (!skb) {
-			stats->rx_dropped++;
-			goto find_next_rx;
-		}
-
-		memcpy(skb->data, rx_data, pkt_len);
-		skb_put(skb, pkt_len);
-
-		ax88179_rx_checksum(skb, &pkt_hdr);
-
-		skb->protocol = eth_type_trans(skb, netdev);
-
-		if (*work_done < budget) {
-			napi_gro_receive(&axdev->napi, skb);
-			*work_done += 1;
-			stats->rx_packets++;
-			stats->rx_bytes += pkt_len;
-		} else {
-			__skb_queue_tail(&axdev->rx_queue, skb);
-		}
-find_next_rx:
-		rx_data += (pkt_len + 7) & 0xFFF8;
+		/* Trim this packet away from the SKB */
+		if (!skb_pull(skb, (pkt_len + 7) & 0xFFF8))
+			return 0;
 	}
 }
 
