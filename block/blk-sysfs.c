@@ -1003,8 +1003,6 @@ void blk_unregister_queue(struct gendisk *disk)
 	if (q->mq_ops)
 		blk_mq_unregister_dev(disk_to_dev(disk), q);
 
-	kobject_uevent(&q->kobj, KOBJ_REMOVE);
-	kobject_del(&q->kobj);
 	blk_trace_remove_sysfs(disk_to_dev(disk));
 
 	mutex_lock(&q->sysfs_lock);
@@ -1016,6 +1014,10 @@ void blk_unregister_queue(struct gendisk *disk)
 		elv_unregister_queue(q);
 	mutex_unlock(&q->sysfs_lock);
 	mutex_unlock(&q->sysfs_dir_lock);
+
+	/* Now that we've deleted all child objects, we can delete the queue. */
+	kobject_uevent(&q->kobj, KOBJ_REMOVE);
+	kobject_del(&q->kobj);
 
 	kobject_put(&disk_to_dev(disk)->kobj);
 }
