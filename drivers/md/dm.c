@@ -634,14 +634,14 @@ static void start_io_acct(struct dm_io *io)
 }
 
 static void end_io_acct(struct mapped_device *md, struct bio *bio,
-		unsigned long start_time, struct dm_stats_aux *stats_aux)
+			unsigned long start_time, struct dm_stats_aux *stats_aux)
 {
 	unsigned long duration = jiffies - start_time;
 	int pending;
 	int rw = bio_data_dir(bio);
 
 	generic_end_io_acct(md->queue, bio_op(bio), &dm_disk(md)->part0,
-			start_time);
+			    start_time);
 
 	if (unlikely(dm_stats_used(&md->stats)))
 		dm_stats_account_io(&md->stats, bio_data_dir(bio),
@@ -2648,6 +2648,8 @@ static int dm_wait_for_completion(struct mapped_device *md, long task_state)
 		io_schedule();
 	}
 	finish_wait(&md->wait, &wait);
+
+	smp_rmb(); /* paired with atomic_dec_return in end_io_acct */
 
 	return r;
 }
