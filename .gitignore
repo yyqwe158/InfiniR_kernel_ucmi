@@ -45,7 +45,7 @@
 *.xz
 Module.symvers
 modules.builtin
-
+*.zip
 #
 # Top-level generic files
 #
@@ -58,7 +58,7 @@ modules.builtin
 /vmlinuz
 /System.map
 /Module.markers
-
+/out/
 #
 # RPM spec file (make rpm-pkg)
 #
