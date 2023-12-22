@@ -17,11 +17,13 @@
 #undef dev_info
 #undef dev_dbg
 #undef dev_err
+#undef dev_warn
 #undef dev_err_ratelimited
 
 #define dev_info(dev, fmt, ...)
 #define dev_dbg(dev, fmt, ...)
 #define dev_err(dev, fmt, ...)
+#define dev_warn(dev, fmt, ...)
 #define dev_err_ratelimited(dev, fmt, ...)
 
 #undef qg_dbg
