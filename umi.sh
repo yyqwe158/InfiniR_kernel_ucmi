@@ -21,6 +21,24 @@ export SUBARCH=arm64
 export KBUILD_COMPILER_STRING="$($MAIN/clang/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
 
 
+
+# Correct panel dimensions for HyperOS/MIUI ROMs
+function miui_fix_dimens()
+{
+	sed -i 's/<70>/<695>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j3s-37-02-0a-dsc-video.dtsi
+	sed -i 's/<70>/<695>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j11-38-08-0a-fhd-cmd.dtsi
+	sed -i 's/<70>/<695>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-k11a-38-08-0a-dsc-cmd.dtsi
+	sed -i 's/<71>/<710>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j1s*
+	sed -i 's/<71>/<710>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j2*
+	sed -i 's/<155>/<1544>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j3s-37-02-0a-dsc-video.dtsi
+	sed -i 's/<155>/<1545>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j11-38-08-0a-fhd-cmd.dtsi
+	sed -i 's/<155>/<1546>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-k11a-38-08-0a-dsc-cmd.dtsi
+	sed -i 's/<154>/<1537>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j1s*
+	sed -i 's/<154>/<1537>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j2*
+}
+
+miui_fix_dimens
+
 KERNEL_DIR=`pwd`
 ZIMAGE_DIR="$KERNEL_DIR/out/arch/arm64/boot"
 # Speed up build process
@@ -58,7 +76,7 @@ cd tmp
 7za a -mx9 tmp.zip *
 cd ..
 rm *.zip
-cp -fp tmp/tmp.zip InfiniR-umi-hyperos-$TIME.zip
+cp -fp tmp/tmp.zip InfiniR-umi-hyperos-v2.85-$TIME.zip
 rm -rf tmp
 echo $TIME
 
@@ -66,3 +84,6 @@ echo $TIME
 git checkout drivers/Makefile &>/dev/null
 rm -rf KernelSU
 rm -rf drivers/kernelsu
+
+# dtsi change remove
+git checkout arch/arm64/boot/dts/vendor &>/dev/null
