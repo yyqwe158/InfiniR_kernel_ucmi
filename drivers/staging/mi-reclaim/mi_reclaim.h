@@ -1,13 +1,19 @@
 #ifndef _MI_RECLAIM_MODULE_H_
 #define _MI_RECLAIM_MODULE_H_
 
-#define ONCE_RECLAIM_PAGES 38400  //150MB, unit page
+#define ST_ONCE_RECLAIM_PAGES 38400  //150MB, unit page
+#define PRESSURE_ONCE_RECLAIM_PAGES 25600  //100MB, unit page
+#define DEFAULT_ONCE_RECLAIM_PAGES 7680  //30MB, unit page
+#define MIN_ONCE_RECLAIM_PAGES 7680  //30MB, unit page
+#define SPEED_ONCE_RECLAIM_PAGES 12800  //50MB, unit page
 #define MIN_RECLAIM_PAGES  32
 
-#define DEFAULT_ANON_PAGE_UP_THRESHOLD_FOR_EIGHTGB  419430 //1.6GB, unit page
-#define DEFAULT_ANON_PAGE_UP_THRESHOLD_FOR_TWELVEGB 917504 //3.5GB, unit page
-#define FREE_SWAP_LIMIT 230400 //900MB, unit page
-#define RECLAIM_INTERVAL_TIME  1000  //ms
+#define DEFAULT_ANON_PAGE_UP_THRESHOLD  314572 //1.2GB, unit page
+#define DEFAULT_FILE_PAGE_UP_THRESHOLD  419430 //1.6GB, unit page
+#define DEFAULT_FILE_PAGE_DOWN_THRESHOLD  314572 //1.2GB, unit page
+#define FREE_SWAP_LIMIT 128000 //500MB, unit page
+#define RECLAIM_INTERVAL_TIME  3000  //ms
+#define BACK_HOME_RECLAIM_TIME_UP 500000000 //ns
 #define RECLAIM_SWAPPINESS 120
 
 #define RAM_EIGHTGB_SIZE 2097152 //8GB unit page
@@ -17,6 +23,7 @@
 
 #define KB(pages) ((pages) << (PAGE_SHIFT - 10))
 #define PAGES(mb) ((mb * 1024) >> (PAGE_SHIFT - 10))
+#define MAX(a,b) ((a)>(b) ? (a):(b))
 
 #define MI_RECLAIM_MODE_RO  0440
 #define MI_RECLAIM_MODE_RW  0660
@@ -32,6 +39,7 @@ enum event_type {
 	CANCEL_ST = 0,
 	RECLAIM_MODE = 1,
 	ST_MODE = 2,
+	PRESSURE_MODE = 3,
 	EVENT_MAX,
 };
 
@@ -40,8 +48,10 @@ typedef struct global_reclaim_page {
 	int           reclaim_type;
 	int           event_type;
 	unsigned long last_reclaim_time;
-	u32           nr_reclaim;
-	u32           anon_up_threshold;
+	unsigned long once_reclaim_time_up;
+	unsigned long nr_reclaim;
+	unsigned long anon_up_threshold;
+	unsigned long file_up_threshold;
 	u64           total_spent_time;
 	u64           total_reclaim_pages;
 	u64           total_reclaim_times;

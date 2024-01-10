@@ -3,6 +3,7 @@
 #include <linux/mm.h>
 #include <linux/sched/mm.h>
 #include <linux/sched.h>
+#include <linux/cpumask.h>
 #include <linux/swap.h>
 #include <linux/semaphore.h>
 #include <linux/rwsem.h>
@@ -29,7 +30,7 @@ mi_reclaim_t *pg_mi_reclaim;
 
 extern unsigned long mi_reclaim_global(unsigned long nr_to_reclaim, int reclaim_type);
 
-static inline unsigned long reclaim_time(unsigned long start)
+static inline unsigned long interval_time(unsigned long start)
 {
 	unsigned long end = jiffies;
 
@@ -37,6 +38,16 @@ static inline unsigned long reclaim_time(unsigned long start)
 		return (unsigned long)(end - start);
 
 	return (unsigned long)(end + (MAX_JIFFY_OFFSET - start) + 1);
+}
+
+static inline unsigned long reclaim_interval(unsigned long start)
+{
+	return interval_time(start);
+}
+
+static inline unsigned long reclaim_time(unsigned long start)
+{
+	return interval_time(start);
 }
 
 inline bool mi_reclaim(const char *name)
@@ -59,53 +70,97 @@ static inline void do_reclaim(void)
 	bool   zram_enable;
 	int reclaim_type;
 	int force_reclaim_type;
+	int event_type;
+	int reclaim_ratio_contiguous_low_count;
+	long nr_cached;
 	unsigned long real_reclaim;
 	unsigned long pages;
-	unsigned long start_jiffies;
+	unsigned long nr_inactive_anon_pages;
+	unsigned long nr_active_anon_pages;
 	unsigned long nr_anon_pages;
+#ifdef ZONE_WMART
 	unsigned long wmark_low_max = 0;
-	u32 anon_up_threshold;
-	u32 nr_want_reclaim_pages;
+	struct zone *zone;
+#endif
+	unsigned long once_reclaim_time_up;
+	unsigned long anon_up_threshold;
+	unsigned long file_up_threshold;
+	unsigned long nr_want_reclaim_pages;
 	u64 reclaim_pages;
 	u64 reclaim_times;
 	u64 spent_time;
-	struct zone *zone;
+	u64 start_time_ns;
 	struct sysinfo i;
 
 	reclaim_type = 0;
 	reclaim_pages = 0;
 	reclaim_times = 0;
 	spent_time = 0;
-	zram_enable = (i.totalswap > 0);
-	if (!zram_enable)
-		return;
+	reclaim_ratio_contiguous_low_count = 0;
 
+	si_meminfo(&i);
+	si_swapinfo(&i);
+	zram_enable = (i.totalswap > 0);
+	if (!zram_enable || i.freeswap < FREE_SWAP_LIMIT)
+		goto end_reclaim;
+#ifdef ZONE_WMART
+#if(LINUX_VERSION_CODE >= KERNEL_VERSION(4,19,0))
 	for_each_zone(zone)
 		if (zone->_watermark[WMARK_LOW] > wmark_low_max)
 			wmark_low_max = zone->_watermark[WMARK_LOW];
+#else
+	for_each_zone(zone)
+		if (zone->watermark[WMARK_LOW] > wmark_low_max)
+			wmark_low_max = zone->watermark[WMARK_LOW];
+#endif
+#endif
+
+	nr_cached = global_node_page_state(NR_FILE_PAGES) - total_swapcache_pages() - i.bufferram;
+	if (nr_cached < DEFAULT_FILE_PAGE_DOWN_THRESHOLD)
+		goto end_reclaim;
 
 	spin_lock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 	force_reclaim_type = pg_mi_reclaim->page_reclaim.reclaim_type;
+	event_type = pg_mi_reclaim->page_reclaim.event_type;
 	nr_want_reclaim_pages = pg_mi_reclaim->page_reclaim.nr_reclaim;
 	anon_up_threshold = pg_mi_reclaim->page_reclaim.anon_up_threshold;
+	file_up_threshold = pg_mi_reclaim->page_reclaim.file_up_threshold;
+	once_reclaim_time_up = pg_mi_reclaim->page_reclaim.once_reclaim_time_up;
 	spin_unlock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
+
+	if  (ST_MODE != event_type) {
+		if (jiffies_to_msecs(reclaim_interval(pg_mi_reclaim->page_reclaim.last_reclaim_time)) < RECLAIM_INTERVAL_TIME)
+			goto end_reclaim;
+		if (nr_cached < file_up_threshold) {
+			event_type = PRESSURE_MODE;
+			nr_want_reclaim_pages = PRESSURE_ONCE_RECLAIM_PAGES;
+		}
+	}
+
+	pg_mi_reclaim->page_reclaim.last_reclaim_time = jiffies;
 	for (pages = 0; pages < nr_want_reclaim_pages; pages += MIN_RECLAIM_PAGES) {
-		unsigned long freeram;
 		real_reclaim = 0;
-		start_jiffies = jiffies;
+		start_time_ns = ktime_get_ns();
 
-		freeram = global_zone_page_state(NR_FREE_PAGES);
-		if (freeram < wmark_low_max)
+#ifdef ZONE_WMART
+		if (global_zone_page_state(NR_FREE_PAGES) < wmark_low_max)
 			break;
-
+#endif
 		if (zram_enable) {
-			nr_anon_pages = global_node_page_state(NR_INACTIVE_ANON);
-			nr_anon_pages += global_node_page_state(NR_ACTIVE_ANON);
-			if (nr_anon_pages > anon_up_threshold) {
+			nr_inactive_anon_pages = global_node_page_state(NR_INACTIVE_ANON);
+			nr_active_anon_pages = global_node_page_state(NR_ACTIVE_ANON);
+			nr_anon_pages = nr_inactive_anon_pages + nr_active_anon_pages;
+			if (nr_anon_pages > anon_up_threshold || force_reclaim_type) {
 				reclaim_type |= (UNMAP_PAGE | SWAP_PAGE);
 				if (force_reclaim_type)
 					reclaim_type = force_reclaim_type;
 				real_reclaim = mi_reclaim_global(MIN_RECLAIM_PAGES, reclaim_type);
+				if (real_reclaim < MIN_RECLAIM_PAGES / 3)
+					reclaim_ratio_contiguous_low_count++;
+				else
+					reclaim_ratio_contiguous_low_count = 0;
+				if (reclaim_ratio_contiguous_low_count > 512)
+					break;
 			}
 		}
 
@@ -114,36 +169,89 @@ static inline void do_reclaim(void)
 			available = si_mem_available();
 			si_meminfo(&i);
 			si_swapinfo(&i);
-			pr_info("reclaim: reclaim_type=%d real_reclaim=%lu freeram=%llu freeswap=%llu MemAvailable=%ld\n",
-				reclaim_type, real_reclaim, KB(i.freeram), KB(i.freeswap), KB(available));
+			pr_info("reclaim: reclaim_type=%d real_reclaim=%lu freeram=%llu freeswap=%llu"
+				" MemAvailable=%ld nr_inactive_anon_pages=%lu nr_active_anon_pages=%lu"
+				" reclaim_ratio_contiguous_low_count %d",
+				reclaim_type, real_reclaim, KB(i.freeram), KB(i.freeswap),
+				KB(available), nr_inactive_anon_pages, nr_active_anon_pages,
+				reclaim_ratio_contiguous_low_count);
 		}
 
 		reclaim_type = 0;
 		reclaim_pages += real_reclaim;
-		spent_time += reclaim_time(start_jiffies);
+		spent_time += MAX(1, ktime_get_ns() - start_time_ns);
 		if (reclaim_pages > nr_want_reclaim_pages)
+			break;
+
+		if (nr_anon_pages < anon_up_threshold)
+			break;
+
+		if (ST_MODE != event_type && PRESSURE_MODE != event_type &&
+				spent_time > once_reclaim_time_up)
 			break;
 
 		cond_resched();
 	}
 
+end_reclaim:
 	spin_lock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 	pg_mi_reclaim->page_reclaim.total_reclaim_pages += reclaim_pages;
 	pg_mi_reclaim->page_reclaim.total_reclaim_times++;
 	pg_mi_reclaim->page_reclaim.total_spent_time += spent_time;
+	pg_mi_reclaim->page_reclaim.nr_reclaim = DEFAULT_ONCE_RECLAIM_PAGES;
 	pg_mi_reclaim->need_reclaim = false;
 	spin_unlock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
+	if (pg_mi_reclaim->debug)
+		pr_info("reclaim event_type %d nr_cached %ld spent_time %llu ns"
+			" nr_want_reclaim_pages %lu reclaim_pages %llu"
+			" once_reclaim_time_up %lu\n",
+			event_type, nr_cached, spent_time,
+			nr_want_reclaim_pages, reclaim_pages,
+			once_reclaim_time_up);
 }
 
 static inline int mi_reclaim_thread_wakeup(void)
 {
+	struct task_struct *reclaim_tsk;
 
 	if (!pg_mi_reclaim->switch_on)
 		return RET_OK;
 
-	pg_mi_reclaim->need_reclaim = true;
-	wake_up(&pg_mi_reclaim->wait);
+	reclaim_tsk = pg_mi_reclaim->task;
+	if (reclaim_tsk && reclaim_tsk->state != TASK_RUNNING) {
+		pg_mi_reclaim->need_reclaim = true;
+		wake_up(&pg_mi_reclaim->wait);
+	}
 	return RET_OK;
+}
+
+static void mi_reclaim_thread_affinity(struct task_struct *task)
+{
+	DECLARE_BITMAP(cpu_bitmap, NR_CPUS);
+	struct cpumask *newmask;
+	long rc;
+
+	// affinity in 0 to 3 cores
+	cpu_bitmap[0] = 15;
+	newmask = to_cpumask(cpu_bitmap);
+
+#if(LINUX_VERSION_CODE >= KERNEL_VERSION(5,4,0))
+	if (!cpumask_equal(newmask, &task->cpus_mask)) {
+#else
+	if (!cpumask_equal(newmask, &task->cpus_allowed)) {
+#endif
+		cpumask_t cpumask_temp;
+		cpumask_and(&cpumask_temp, newmask, cpu_online_mask);
+
+		if (0 == cpumask_weight(&cpumask_temp))
+			return;
+
+		rc = sched_setaffinity(task->pid, newmask);
+		if (rc != 0)
+			pr_err("mi_reclaim sched_setaffinity() failed");
+	}
+
+	return;
 }
 
 static int mi_reclaim_thread(void *unused)
@@ -156,6 +264,7 @@ static int mi_reclaim_thread(void *unused)
 	while (!kthread_should_stop()) {
 		try_to_freeze();
 
+		mi_reclaim_thread_affinity(tsk);
 		wait_event_freezable(pg_mi_reclaim->wait,
 			pg_mi_reclaim->need_reclaim || kthread_should_stop());
 
@@ -237,8 +346,10 @@ static ssize_t config_show(struct kobject *kobj,
 	int ret;
 	int reclaim_swappiness;
 	int reclaim_type;
-	u32 nr_reclaim;
-	u32 anon_up_threshold;
+	unsigned long once_reclaim_time_up;
+	unsigned long nr_reclaim;
+	unsigned long anon_up_threshold;
+	unsigned long file_up_threshold;
 	u64 totalram;
 
 	spin_lock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
@@ -246,6 +357,8 @@ static ssize_t config_show(struct kobject *kobj,
 	reclaim_type = pg_mi_reclaim->page_reclaim.reclaim_type;
 	nr_reclaim = pg_mi_reclaim->page_reclaim.nr_reclaim;
 	anon_up_threshold = pg_mi_reclaim->page_reclaim.anon_up_threshold;
+	file_up_threshold = pg_mi_reclaim->page_reclaim.file_up_threshold;
+	once_reclaim_time_up = pg_mi_reclaim->page_reclaim.once_reclaim_time_up;
 	totalram = pg_mi_reclaim->sysinfo.totalram;
 	spin_unlock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 
@@ -254,11 +367,15 @@ static ssize_t config_show(struct kobject *kobj,
 		"reclaim_type %d\n"
 		"nr_reclaim %lu\n"
 		"anon_up %lu\n"
+		"file_up %lu\n"
+		"once_reclaim_time_up %lu\n"
 		"totalram %llu\n",
 		reclaim_swappiness,
 		reclaim_type,
 		nr_reclaim,
 		anon_up_threshold,
+		file_up_threshold,
+		once_reclaim_time_up,
 		totalram);
 
 	return ret;
@@ -294,26 +411,34 @@ static ssize_t event_store(struct kobject *kobj,
 	if (ret)
 		return ret;
 
-	/*  event which range is under fifty is event type,
-	*  zero is cancel st mode, one is reclaim mode, two is st mode;
+	/* event which range is under fifty is event type,
+	*  zero  : cancel st mode
+	*  one   : reclaim mode
+	*  two   : st mode
+	*  three : pressure mode
 	*  More than 50 is number of reclaimed pages */
 	if (event) {
 		if (ST_MODE == event) {
 			spin_lock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 			pg_mi_reclaim->page_reclaim.event_type = event;
+			pg_mi_reclaim->page_reclaim.nr_reclaim = ST_ONCE_RECLAIM_PAGES;
 			spin_unlock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 		} else if (RECLAIM_MODE == event) {
 			mi_reclaim_thread_wakeup();
 		} else {
 			/*event which value is one represent wake-up reclaim thread
 			 *other values represent quantity of reclaimed, unit is MB*/
-			spin_lock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
-			pg_mi_reclaim->page_reclaim.nr_reclaim = PAGES(event);
-			spin_unlock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
+			if (PAGES(event) >= MIN_ONCE_RECLAIM_PAGES) {
+				spin_lock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
+				pg_mi_reclaim->page_reclaim.nr_reclaim = PAGES(event);
+				spin_unlock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
+				mi_reclaim_thread_wakeup();
+			}
 		}
 	} else {
 		spin_lock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 		pg_mi_reclaim->page_reclaim.event_type = CANCEL_ST;
+		pg_mi_reclaim->page_reclaim.nr_reclaim = DEFAULT_ONCE_RECLAIM_PAGES;
 		spin_unlock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 	}
 
@@ -346,11 +471,16 @@ static ssize_t config_store(struct kobject *kobj,
 	int reclaim_type;
 	unsigned long nr_reclaim;
 	unsigned long anon_up_threshold;
+	unsigned long file_up_threshold;
+	unsigned long once_reclaim_time_up;
 
-	if (sscanf(buf, "%d %d %lu %lu", &reclaim_swappiness,
+	if (sscanf(buf, "%d %d %lu %lu %lu %lu",
+			&reclaim_swappiness,
 			&reclaim_type,
 			&nr_reclaim,
-			&anon_up_threshold) != 4) {
+			&anon_up_threshold,
+			&file_up_threshold,
+			&once_reclaim_time_up) != 6) {
 		return -EINVAL;
 	}
 
@@ -359,6 +489,8 @@ static ssize_t config_store(struct kobject *kobj,
 	pg_mi_reclaim->page_reclaim.reclaim_type = reclaim_type;
 	pg_mi_reclaim->page_reclaim.nr_reclaim = nr_reclaim;
 	pg_mi_reclaim->page_reclaim.anon_up_threshold = anon_up_threshold;
+	pg_mi_reclaim->page_reclaim.file_up_threshold = file_up_threshold;
+	pg_mi_reclaim->page_reclaim.once_reclaim_time_up = once_reclaim_time_up;
 	spin_unlock(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 
 	return len;
@@ -418,10 +550,10 @@ static void mi_reclaim_setup(void)
 	pg_mi_reclaim->sysinfo.totalram = i.totalram;
 	pg_mi_reclaim->page_reclaim.last_reclaim_time = jiffies;
 	pg_mi_reclaim->page_reclaim.reclaim_swappiness = RECLAIM_SWAPPINESS;
-	pg_mi_reclaim->page_reclaim.nr_reclaim = ONCE_RECLAIM_PAGES;
-	pg_mi_reclaim->page_reclaim.anon_up_threshold = DEFAULT_ANON_PAGE_UP_THRESHOLD_FOR_EIGHTGB;
-	if (i.totalram > RAM_EIGHTGB_SIZE)
-		pg_mi_reclaim->page_reclaim.anon_up_threshold = DEFAULT_ANON_PAGE_UP_THRESHOLD_FOR_TWELVEGB;
+	pg_mi_reclaim->page_reclaim.nr_reclaim = DEFAULT_ONCE_RECLAIM_PAGES;
+	pg_mi_reclaim->page_reclaim.once_reclaim_time_up = BACK_HOME_RECLAIM_TIME_UP;
+	pg_mi_reclaim->page_reclaim.anon_up_threshold = DEFAULT_ANON_PAGE_UP_THRESHOLD;
+	pg_mi_reclaim->page_reclaim.file_up_threshold = DEFAULT_FILE_PAGE_UP_THRESHOLD;
 	init_waitqueue_head(&pg_mi_reclaim->wait);
 	spin_lock_init(&pg_mi_reclaim->page_reclaim.reclaim_lock);
 }
