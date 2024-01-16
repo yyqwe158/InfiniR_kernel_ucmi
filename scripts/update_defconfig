@@ -15,7 +15,9 @@ export KERNEL_CFG
 export OUT_DIR
 
 # Set compiler PATH
-PATH=$HOME/gas:$HOME/clang/bin:$PATH
+DIR=`readlink -f .`
+MAIN=`readlink -f ${DIR}/..`
+PATH="$MAIN/clang/bin:$PATH"
 
 BUILD="make O=$OUT_DIR \
 ARCH=arm64 \
@@ -29,7 +31,7 @@ export BUILD
 cd "$KERNEL_TOP" || exit
 
 # These values must be changed for forks!
-KERNEL_DEFCONFIG_URL="https://github.com/UtsavBalar1231/kernel_xiaomi_sm8250"
+KERNEL_DEFCONFIG_URL="https://github.com/toraidl/InfiniR_kernel_ucmi.git"
 KERNEL_DEFCONFIG_HEAD=$(git -C ${KERNEL_CFG} rev-parse HEAD)
 
 SOC="kona"
@@ -94,12 +96,12 @@ if [ -n  "$*" ]; then
   ${KERNEL_CFG}/"${DEVICE}".config);
 
   case "$ret" in
-    *"error"*|*"ERROR"*|*"Exit"*) echo "ERROR: $ret"; exit 1;;
+    *"error"*|*"Exit"*) echo "ERROR: $ret"; exit 1;;
   esac
   echo "Building new defconfig ..."
   ret=$(${BUILD} savedefconfig 2>&1);
   case "$ret" in
-    *"error"*|*"ERROR"*) echo "ERROR: $ret"; exit 1;;
+    *"error"*) echo "ERROR: $ret"; exit 1;;
   esac
   mv "$OUT_DIR"/defconfig ./arch/arm64/configs/"$1"_defconfig
 
@@ -183,12 +185,12 @@ EOM
       ${KERNEL_CFG}/"${DEVICE}".config);
 
       case "$ret" in
-        *"error"*|*"ERROR"*|*"Exit"*) echo "ERROR: $ret"; exit 1;;
+        *"error"*|*"Exit"*) echo "ERROR: $ret"; exit 1;;
       esac
       echo "Building new defconfig ..."
       ret=$(${BUILD} savedefconfig 2>&1);
       case "$ret" in
-        *"error"*|*"ERROR"*) echo "ERROR: $ret"; exit 1;;
+        *"error"*) echo "ERROR: $ret"; exit 1;;
       esac
       mv "$OUT_DIR"/defconfig ./arch/arm64/configs/"$device"_defconfig
   done
