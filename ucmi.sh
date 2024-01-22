@@ -95,6 +95,7 @@ echo $TIME
 
 # Kernel-SU remove
 git checkout drivers/Makefile &>/dev/null
+git checkout drivers/Kconfig &>/dev/null
 rm -rf KernelSU
 rm -rf drivers/kernelsu
 
