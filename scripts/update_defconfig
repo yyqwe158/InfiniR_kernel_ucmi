@@ -64,6 +64,9 @@ if [ -n  "$*" ]; then
     umi)
       DEVICE=$1;
     ;;
+    ucmi)
+      DEVICE=$1;
+    ;;
     thyme)
       DEVICE=$1;
     ;;
@@ -121,7 +124,7 @@ HEAD of the project used to prepare this commit:
 ${KERNEL_DEFCONFIG_URL}/tree/${KERNEL_DEFCONFIG_HEAD}
 EOM
 
-  DEVICES="alioth apollo cas cmi elish enuma lmi munch umi thyme psyche"
+  DEVICES="alioth apollo cas cmi elish enuma lmi munch umi ucmi thyme psyche"
 
   for device in $DEVICES; do \
 
@@ -151,6 +154,9 @@ EOM
         DEVICE=$device;
       ;;
       umi)
+        DEVICE=$device;
+      ;;
+      ucmi)
         DEVICE=$device;
       ;;
       thyme)
