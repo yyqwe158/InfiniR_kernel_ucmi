@@ -6,6 +6,7 @@
 
 #include <linux/ipc_logging.h>
 #include <linux/printk.h>
+#include <linux/printk_disable_msg.h>
 
 #define CNSS_IPC_LOG_PAGES		32
 
