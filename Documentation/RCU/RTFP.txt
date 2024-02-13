@@ -2093,7 +2093,7 @@ lot of {Linux} into your technology!!!"
 ,annotation={
 	Updated RCU classic algorithm.  Introduced multi-tailed list
 	for RCU callbacks and also pulling common code into
-	__call_rcu().
+	__call_rcu_common().
 }
 }
 

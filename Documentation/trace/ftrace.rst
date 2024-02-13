@@ -2445,7 +2445,7 @@ Flags::
     # |    |    |           |   |                     |   |   |   |
     0)    sh-4802     |               |                  d_free() {
     0)    sh-4802     |               |                    call_rcu() {
-    0)    sh-4802     |               |                      __call_rcu() {
+    0)    sh-4802     |               |                      __call_rcu_common() {
     0)    sh-4802     |   0.616 us    |                        rcu_process_gp_end();
     0)    sh-4802     |   0.586 us    |                        check_for_new_grace_period();
     0)    sh-4802     |   2.899 us    |                      }
