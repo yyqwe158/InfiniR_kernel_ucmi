@@ -23,10 +23,6 @@
 #include <soc/qcom/qseecomi.h>
 #include <soc/qcom/qtee_shmbridge.h>
 
-#include <linux/proc_fs.h>
-#include <linux/wait.h>
-#include <linux/freezer.h>
-
 /* QSEE_LOG_BUF_SIZE = 32K */
 #define QSEE_LOG_BUF_SIZE 0x8000
 
@@ -398,9 +394,6 @@ enum tzdbg_stats_type {
 	TZDBG_HYP_LOG,
 	TZDBG_STATS_MAX
 };
-
-int tz_log_tag = TZDBG_LOG;
-int qsee_log_tag = TZDBG_QSEE_LOG;
 
 struct tzdbg_stat {
 	size_t display_len;
@@ -844,7 +837,6 @@ static int _disp_log_stats_v2(struct tzdbg_log_v2_t *log,
 						debug_rw_buf_size);
 
 	}
-	}
 
 	max_len = (count > debug_rw_buf_size) ? debug_rw_buf_size : count;
 
@@ -1265,27 +1257,6 @@ static const struct file_operations tzdbg_fops = {
 	.owner   = THIS_MODULE,
 	.read    = tzdbgfs_read,
 	.open    = simple_open,
-};
-
-static ssize_t qsee_log_dump_procfs_read(struct file *file, char __user *buf, size_t count, loff_t *offp)
-{
-	file->private_data = (void *)(&qsee_log_tag);
-	return tzdbgfs_read(file, buf, count, offp);
-}
-const struct file_operations qsee_log_dump_proc_fops = {
-	.owner = THIS_MODULE,
-	.read = qsee_log_dump_procfs_read,
-};
-
-static ssize_t tz_log_dump_procfs_read(struct file *file, char __user *buf, size_t count, loff_t *offp)
-{
-	file->private_data = (void *)(&tz_log_tag);
-	return tzdbgfs_read(file, buf, count, offp);
-}
-
-const struct file_operations tz_log_dump_proc_fops = {
-	.owner = THIS_MODULE,
-	.read = tz_log_dump_procfs_read,
 };
 
 
